@@ -35,6 +35,6 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(7575, () => {
-  console.log("Server is running on http://localhost:3000");
+server.listen(1212, () => {
+  console.log("Server is running on http://localhost:1212");
 });
