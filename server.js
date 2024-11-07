@@ -4,6 +4,12 @@ const { Server } = require("socket.io");
 const path = require('path');
 const app = express();
 const server = http.createServer(app);
+const PORT = process.env.PORT || 1212;
+
+server.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
+
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -33,8 +39,4 @@ io.on("connection", (socket) => {
     console.log(`Player disconnected: ${socket.id}`);
     delete players[socket.id]; // Remove the player from the list
   });
-});
-
-server.listen(1212, () => {
-  console.log("Server is running on http://localhost:1212");
 });
