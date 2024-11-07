@@ -20,7 +20,7 @@ $(function () {
     size: 5,
   };
 
-  const socket = io("http://localhost:3000");
+  const socket = io("https://fire-in-the-hole.onrender.com");
   const canvas = document.getElementById("BasePlate");
   const ctx = canvas.getContext("2d");
 
