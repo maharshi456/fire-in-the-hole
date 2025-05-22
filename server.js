@@ -5,6 +5,7 @@ const path = require("path");
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 1212;
+let players = {};
 
 server.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
