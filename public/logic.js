@@ -3,9 +3,8 @@ $(function () {
   let mouseY = 0; // Track the mouse position
   const keysPressed = {};
   const players = {};
-  const playerId = Math.random().toString(36).substring(2, 15);
-  const player = {
-    id: playerId,
+  let player = {
+    id: "",
     x: 10,
     y: 10,
     width: 20,
@@ -13,7 +12,9 @@ $(function () {
     color: "lightblue",
     speed: 10,
     bullets: [],
+    alive: true,
   };
+  let playerId = "";
 
   const ammo = {
     speed: 10,
@@ -23,21 +24,45 @@ $(function () {
   const socket = io("https://fire-in-the-hole.onrender.com");
   const canvas = document.getElementById("BasePlate");
   const ctx = canvas.getContext("2d");
+  const enemyColor = getRandomColor(); // Random color for enemies
 
   // Set initial canvas dimensions
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight - 4;
 
-  socket.on("playerMove", (data) => {
-    players[data.id] = data; // Update player position in players object
+  socket.on("connect", () => {
+    playerId = socket.id;
+    player.id = playerId;
+  });
+
+  socket.on("playerMove", (playerData) => {
+    if (playerData.id !== playerId) {
+      players[playerData.id] = playerData; // Only update other players
+    }
   });
 
   socket.on("bulletFired", (bulletData) => {
-    // Add the received bullet to the bullets array so it can be rendered
-    player.bullets.push(bulletData);
+    if (bulletData.playerId !== playerId) {
+      if (!players[bulletData.playerId]) return; // Player not found
+      if (!players[bulletData.playerId].bullets)
+        players[bulletData.playerId].bullets = [];
+      players[bulletData.playerId].bullets.push(bulletData);
+    }
+  });
+
+  socket.on("playerKilled", (killedId) => {
+    if (players[killedId]) {
+      players[killedId].alive = false;
+    }
+  });
+
+  socket.on("playerDisconnected", (disconnectedId) => {
+    delete players[disconnectedId];
   });
 
   function movement() {
+    if (!player.alive) return; // Prevent movement if dead
+
     if (keysPressed["ArrowUp"] || keysPressed["w"]) player.y -= player.speed;
     if (keysPressed["ArrowDown"] || keysPressed["s"]) player.y += player.speed;
     if (keysPressed["ArrowLeft"] || keysPressed["a"]) player.x -= player.speed;
@@ -52,6 +77,9 @@ $(function () {
     // Render player's movement locally
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillRect(player.x, player.y, 20, 20);
+
+    player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+    player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
   }
 
   // Adjust canvas size on window resize
@@ -79,8 +107,19 @@ $(function () {
     mouseY = e.clientY - rect.top;
   });
 
+  // Random Color Generator
+  function getRandomColor() {
+    var letters = "0123456789ABCDEF";
+    var color = "#";
+    for (var i = 0; i < 6; i++) {
+      color += letters[Math.floor(Math.random() * 16)];
+    }
+    return color;
+  }
+
   // Shoot bullet
   function shootBullet() {
+    if (!player.alive) return; // Prevent shooting if dead
     const angle = Math.atan2(
       mouseY - (player.y + player.height / 2), // Use center of player for angle calculation
       mouseX - (player.x + player.width / 2)
@@ -93,12 +132,11 @@ $(function () {
       y: player.y + player.height / 2,
       speedX: speedX,
       speedY: speedY,
+      playerId: playerId,
     };
 
     player.bullets.push(bullet);
-
-    // Emit the bullet data to other clients
-    socket.emit("bulletFired", bullet);
+    socket.emit("bulletFired", bullet); // Emit the bullet data to other clients
   }
 
   // Draw player, bullets, indicator, and update canvas
@@ -107,74 +145,62 @@ $(function () {
 
     // Draw all players
     Object.values(players).forEach((p) => {
-      ctx.fillStyle = p.id === playerId ? p.color : "red"; // Local player is light blue, others are red
-      ctx.fillRect(p.x, p.y, p.width, p.height);
-    });
-
-    // Draw bullets
-    player.bullets.forEach((bullet) => {
-      ctx.fillStyle = "red";
-      ctx.fillRect(bullet.x, bullet.y, ammo.size, ammo.size);
-    });
-
-    // Draw indicator line from player to mouse position
-    // drawArrow(player.x, player.y, player.width, player.height, mouseX, mouseY);
-  }
-
-  // function drawArrow(playerX, playerY, playerWidth, playerHeight, toX, toY) {
-  //   const arrowLength = 30; // Arrow shaft length
-  //   const angle = Math.atan2(
-  //     toY - (playerY + playerHeight / 2),
-  //     toX - (playerX + playerWidth / 2)
-  //   ); // Calculate angle between player center and mouse
-
-  //   // Calculate the start point of the arrow (after the player rectangle)
-  //   const playerCenterX = playerX + playerWidth / 2;
-  //   const playerCenterY = playerY + playerHeight / 2;
-
-  //   // Offset the starting point by moving along the angle from the center of the player to just beyond the player's edge
-  //   const offsetX = (playerWidth / 2) * Math.cos(angle);
-  //   const offsetY = (playerHeight / 2) * Math.sin(angle);
-  //   const startX = playerCenterX + offsetX; // Start after the player rectangle
-  //   const startY = playerCenterY + offsetY; // Start after the player rectangle
-
-  //   // Calculate the end of the arrow shaft
-  //   const endX = startX + arrowLength * Math.cos(angle);
-  //   const endY = startY + arrowLength * Math.sin(angle);
-
-  //   // Arrow shaft
-  //   ctx.beginPath();
-  //   ctx.moveTo(startX, startY);
-  //   ctx.lineTo(endX, endY);
-  //   ctx.strokeStyle = "black"; // Arrow color
-  //   ctx.lineWidth = 2;
-  //   ctx.stroke();
-  // }
-
-  function update() {
-    movement();
-
-    player.bullets.forEach((bullet, index) => {
-      bullet.x += bullet.speedX;
-      bullet.y += bullet.speedY;
-
-      // Remove bullets that go off screen
-      if (
-        bullet.x < 0 ||
-        bullet.x > canvas.width ||
-        bullet.y < 0 ||
-        bullet.y > canvas.height
-      ) {
-        player.bullets.splice(index, 1);
+      if (p.bullets) {
+        p.bullets.forEach((bullet) => {
+          ctx.fillStyle = "red";
+          ctx.fillRect(bullet.x, bullet.y, ammo.size, ammo.size);
+        });
       }
 
-      // if (checkCollision(bullet, enemy)) {
-      //   console.log("Bullet hit the enemy!");
-      //   enemy = {};
-      //   // Remove the bullet after hitting the enemy
-      //   player.bullets.splice(index, 1);
-      // }
+      // Only draw player if alive
+      if (p.alive) {
+        ctx.fillStyle = p.id === playerId ? p.color : "red";
+        ctx.fillRect(p.x, p.y, p.width, p.height);
+      }
     });
+  }
+
+  function update() {
+    if (player.alive) {
+      movement();
+
+      player.bullets.forEach((bullet, index) => {
+        bullet.x += bullet.speedX;
+        bullet.y += bullet.speedY;
+
+        // Remove bullets that go off screen
+        if (
+          bullet.x < 0 ||
+          bullet.x > canvas.width ||
+          bullet.y < 0 ||
+          bullet.y > canvas.height
+        ) {
+          player.bullets.splice(index, 1);
+        }
+
+        // enemy get hit by player bullets
+        Object.values(players).forEach((p) => {
+          if (p.id !== playerId && checkCollision(bullet, p)) {
+            socket.emit("playerKilled", p.id); // Notify server
+            p.alive = false;
+            // player.bullets.splice(index, 1);
+          }
+        });
+      });
+
+      // player got killed by enemy bullets
+      Object.values(players).forEach((ele) => {
+        if (ele.id !== playerId) {
+          ele.bullets.forEach((bullet, index) => {
+            if (checkCollision(bullet, player)) {
+              console.log("im dead");
+              // ele.bullets.splice(index, 1);
+              player.alive = false; // Mark the local player as dead
+            }
+          });
+        }
+      });
+    }
 
     draw();
   }
@@ -191,8 +217,16 @@ $(function () {
 
   // Game loop
   function gameLoop() {
-    update();
-    requestAnimationFrame(gameLoop);
+    if (!player.alive) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "black";
+      ctx.font = "30px Arial";
+      ctx.fillText("Game Over", canvas.width / 2 - 70, canvas.height / 2);
+      return;
+    } else {
+      update();
+      requestAnimationFrame(gameLoop);
+    }
   }
 
   // Start the game
