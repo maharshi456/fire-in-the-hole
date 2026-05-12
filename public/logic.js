@@ -6,6 +6,9 @@ $(function () {
   let bullets = [];
   let weapons = [];
   let mysteryBox = null;
+  let damageNumbers = [];
+  let alerts = [];
+  let killFeed = [];
   const pendingWeaponPickups = new Set();
   let respawnAt = 0;
   let nextShotAt = 0;
@@ -30,6 +33,7 @@ $(function () {
     ability: null,
     armorUntil: 0,
     berserkerUntil: 0,
+    spawnProtectedUntil: 0,
     lastShotAt: 0,
     gameOver: false,
   };
@@ -47,13 +51,17 @@ $(function () {
   const berserkerWeightMultiplier = 0.35;
   const berserkerCooldownMultiplier = 0.65;
   const berserkerBulletSpeedMultiplier = 1.15;
+  const playerSpriteSize = 54;
+  const weaponSpriteSize = 60;
+  const pickupSpriteSize = 72;
   const respawnDelay = 2000;
   const sessionId =
     sessionStorage.getItem("fireInTheHoleSessionId") ||
     `${Date.now()}-${Math.random()}`;
   sessionStorage.setItem("fireInTheHoleSessionId", sessionId);
   const defaultPlayerName = `Player ${Math.floor(Math.random() * 900) + 100}`;
-  let playerName = sessionStorage.getItem("fireInTheHolePlayerName") || defaultPlayerName;
+  let playerName =
+    sessionStorage.getItem("fireInTheHolePlayerName") || defaultPlayerName;
 
   const socket = io(window.location.origin);
   const canvas = document.getElementById("BasePlate");
@@ -107,6 +115,7 @@ $(function () {
 
   socket.on("mysteryBoxSpawned", (box) => {
     mysteryBox = box;
+    addAlert("Mystery Box spawned at center!");
   });
 
   socket.on("mysteryBoxOpening", (box) => {
@@ -120,10 +129,21 @@ $(function () {
   socket.on("mysteryBoxClaimed", (data) => {
     mysteryBox = null;
     players[data.player.id] = data.player;
+    addAlert(`${data.player.name} found ${data.ability.name}`);
 
     if (data.player.id === playerId) {
       syncLocalPlayer(data.player);
     }
+  });
+
+  socket.on("damageDealt", (data) => {
+    damageNumbers.push({
+      x: data.x,
+      y: data.y,
+      damage: data.damage,
+      createdAt: Date.now(),
+      duration: 800,
+    });
   });
 
   socket.on("shotRejected", (data) => {
@@ -147,6 +167,7 @@ $(function () {
 
   socket.on("playerKilled", (data) => {
     Object.assign(players, data.players);
+    addKillFeed(data.killerId, data.killedId);
 
     if (players[playerId]) {
       syncLocalPlayer(players[playerId]);
@@ -241,6 +262,27 @@ $(function () {
     startScreen.classList.add("hidden");
   }
 
+  function addAlert(message) {
+    alerts.push({
+      message,
+      createdAt: Date.now(),
+      duration: 3000,
+    });
+  }
+
+  function addKillFeed(killerId, killedId) {
+    const killerName = players[killerId]?.name || "Unknown";
+    const killedName = players[killedId]?.name || "Unknown";
+
+    killFeed.unshift({
+      message: `${killerName} eliminated ${killedName}`,
+      createdAt: Date.now(),
+      duration: 5000,
+    });
+
+    killFeed = killFeed.slice(0, 5);
+  }
+
   function movement() {
     if (!gameStarted || !player.alive || player.gameOver) return; // Prevent movement if dead
 
@@ -251,7 +293,8 @@ $(function () {
     if (keysPressed["ArrowUp"] || keysPressed["w"]) player.y -= movementSpeed;
     if (keysPressed["ArrowDown"] || keysPressed["s"]) player.y += movementSpeed;
     if (keysPressed["ArrowLeft"] || keysPressed["a"]) player.x -= movementSpeed;
-    if (keysPressed["ArrowRight"] || keysPressed["d"]) player.x += movementSpeed;
+    if (keysPressed["ArrowRight"] || keysPressed["d"])
+      player.x += movementSpeed;
 
     player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
     player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
@@ -322,13 +365,18 @@ $(function () {
     if (!player.alive || player.gameOver) return; // Prevent shooting if dead
     if (!player.weapon) return;
     const hasBerserker = player.berserkerUntil > Date.now();
-    if (!hasBerserker && player.weapon.reloading && Date.now() < player.weapon.reloadCompleteAt) return;
+    if (
+      !hasBerserker &&
+      player.weapon.reloading &&
+      Date.now() < player.weapon.reloadCompleteAt
+    )
+      return;
     if (!hasBerserker && player.weapon.magazine <= 0) return;
     if (Date.now() < nextShotAt) return;
 
     const angle = Math.atan2(
       mouseY - (player.y + player.height / 2), // Use center of player for angle calculation
-      mouseX - (player.x + player.width / 2)
+      mouseX - (player.x + player.width / 2),
     );
     const bulletSpeed =
       (player.weapon.bulletSpeed || ammo.speed) *
@@ -375,18 +423,18 @@ $(function () {
   // Draw player, bullets, indicator, and update canvas
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#d6d6d6";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawBackground();
 
     // Draw all players
     Object.values(players).forEach((p) => {
       // Only draw player if alive
       if (p.joined && p.alive) {
-        ctx.fillStyle = p.id === playerId ? p.color : "red";
-        ctx.fillRect(p.x, p.y, p.width, p.height);
+        drawShadow(p.x + p.width / 2, p.y + p.height / 2);
+        drawPlayerSprite(p);
         drawAbilityEffects(p);
         drawEquippedWeapon(p);
         drawReloadProgress(p);
+        drawLowAmmoWarning(p);
         drawPlayerName(p);
         drawHealthBar(p);
       }
@@ -404,6 +452,9 @@ $(function () {
 
     drawHud();
     drawLeaderboard();
+    drawDamageNumbers();
+    drawAlerts();
+    drawKillFeed();
 
     if (player.gameOver) {
       drawGameOverMessage();
@@ -412,13 +463,39 @@ $(function () {
     }
   }
 
+  function drawBackground() {
+    if (assets.floor) {
+      const floorCanvas = document.createElement("canvas");
+      const floorContext = floorCanvas.getContext("2d");
+      floorCanvas.width = 410;
+      floorCanvas.height = 410;
+      floorContext.drawImage(assets.floor, 0, 0, floorCanvas.width, floorCanvas.height);
+      const pattern = ctx.createPattern(floorCanvas, "repeat");
+      ctx.fillStyle = pattern || "#d6d6d6";
+    } else {
+      ctx.fillStyle = "#d6d6d6";
+    }
+
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
   function update() {
     if (gameStarted && player.alive && !player.gameOver) {
       movement(); // Only local movement
     }
 
     updateBullets();
+    updateFeedback();
     draw();
+  }
+
+  function updateFeedback() {
+    const now = Date.now();
+    damageNumbers = damageNumbers.filter(
+      (item) => now - item.createdAt < item.duration,
+    );
+    alerts = alerts.filter((item) => now - item.createdAt < item.duration);
+    killFeed = killFeed.filter((item) => now - item.createdAt < item.duration);
   }
 
   function updateBullets() {
@@ -434,7 +511,11 @@ $(function () {
         return;
       }
 
-      if (bullet.id && bullet.playerId !== playerId && checkCollision(bullet, player)) {
+      if (
+        bullet.id &&
+        bullet.playerId !== playerId &&
+        checkCollision(bullet, player)
+      ) {
         hitBulletIds.add(bullet.id);
         socket.emit("playerHit", {
           targetId: playerId,
@@ -450,7 +531,7 @@ $(function () {
         bullet.x >= 0 &&
         bullet.x <= canvas.width &&
         bullet.y >= 0 &&
-        bullet.y <= canvas.height
+        bullet.y <= canvas.height,
     );
   }
 
@@ -473,7 +554,10 @@ $(function () {
 
   function checkWeaponPickup() {
     weapons.forEach((weapon) => {
-      if (!pendingWeaponPickups.has(weapon.id) && checkCollision(player, weapon)) {
+      if (
+        !pendingWeaponPickups.has(weapon.id) &&
+        checkCollision(player, weapon)
+      ) {
         pendingWeaponPickups.add(weapon.id);
         socket.emit("weaponPickup", weapon.id);
       }
@@ -481,42 +565,94 @@ $(function () {
   }
 
   function drawHud() {
-    const displayId = playerId || "joining";
-    const health = `${player.health || 0}/${player.maxHealth || 100}`;
+    const displayId = playerId ? `${playerId.slice(0, 6)}...` : "joining";
+    const healthPercent = Math.max(
+      0,
+      (player.health || 0) / (player.maxHealth || 100),
+    );
     const weapon = player.weapon ? player.weapon.name : "None";
+    const ammoPercent = player.weapon
+      ? player.berserkerUntil > Date.now()
+        ? 1
+        : Math.max(0, player.weapon.magazine / player.weapon.magazineSize)
+      : 0;
     const ammoText = player.weapon
       ? player.berserkerUntil > Date.now()
         ? "Unlimited"
         : `${player.weapon.magazine}/${player.weapon.reserveAmmo}`
       : "0/0";
     const ability = player.ability ? player.ability.name : "None";
-    const reloadText =
-      player.weapon?.reloading && Date.now() < player.weapon.reloadCompleteAt
-        ? `${Math.ceil((player.weapon.reloadCompleteAt - Date.now()) / 100) / 10}s`
-        : "Ready";
-    const speed = getMovementSpeed().toFixed(1);
-    const weight = getEffectiveWeaponWeight().toFixed(1);
-    const cooldown =
-      player.weapon && Date.now() < nextShotAt
-        ? `${Math.ceil((nextShotAt - Date.now()) / 100) / 10}s`
-        : "Ready";
+    const x = 12;
+    const y = 12;
+    const width = 292;
+    const height = 136;
 
-    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
-    ctx.fillRect(12, 12, 380, 276);
+    drawGlassPanel(x, y, width, height);
 
-    ctx.fillStyle = "white";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
     ctx.font = "16px Arial";
-    ctx.fillText(`Name: ${player.name || playerName}`, 24, 38);
-    ctx.fillText(`Score: ${player.score || 0}`, 24, 62);
-    ctx.fillText(`Lives: ${player.lives || 0}`, 24, 86);
-    ctx.fillText(`Health: ${health}`, 24, 110);
-    ctx.fillText(`Weapon: ${weapon}`, 24, 134);
-    ctx.fillText(`Ammo: ${ammoText}`, 24, 158);
-    ctx.fillText(`Reload: ${reloadText}`, 24, 182);
-    ctx.fillText(`Weight: ${weight} | Speed: ${speed}`, 24, 206);
-    ctx.fillText(`Fire: ${cooldown}`, 24, 230);
-    ctx.fillText(`Ability: ${ability}`, 24, 254);
-    ctx.fillText(`Player ID: ${displayId}`, 24, 278);
+    ctx.fillText(player.name || playerName, x + 14, y + 24);
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.78)";
+    ctx.font = "13px Arial";
+    ctx.fillText(`ID ${displayId}`, x + 14, y + 44);
+    ctx.fillText(`Score ${player.score || 0}`, x + 176, y + 24);
+    ctx.fillText(`Lives ${player.lives || 0}`, x + 176, y + 44);
+
+    drawMeter(x + 14, y + 60, width - 28, 10, healthPercent, "#2ecc71");
+    drawMeter(x + 14, y + 88, width - 28, 10, ammoPercent, "#f1c40f");
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.font = "13px Arial";
+    ctx.fillText(
+      `HP ${Math.round(player.health || 0)}/${player.maxHealth || 100}`,
+      x + 14,
+      y + 84,
+    );
+    ctx.fillText(`${weapon}  Ammo ${ammoText}`, x + 14, y + 112);
+    ctx.fillText(`Ability ${ability}`, x + 14, y + 136);
+  }
+
+  function drawGlassPanel(x, y, width, height) {
+    ctx.fillStyle = "rgba(12, 14, 18, 0.38)";
+    drawRoundRect(x, y, width, height, 8);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+    ctx.lineWidth = 1;
+    drawRoundRect(x + 0.5, y + 0.5, width - 1, height - 1, 8);
+    ctx.stroke();
+  }
+
+  function drawMeter(x, y, width, height, percent, color) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
+    drawRoundRect(x, y, width, height, height / 2);
+    ctx.fill();
+
+    ctx.fillStyle = color;
+    drawRoundRect(
+      x,
+      y,
+      width * Math.max(0, Math.min(1, percent)),
+      height,
+      height / 2,
+    );
+    ctx.fill();
+  }
+
+  function drawRoundRect(x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
   }
 
   function getMovementSpeed() {
@@ -525,7 +661,10 @@ $(function () {
 
   function getEffectiveWeaponWeight() {
     const hasBerserker = player.berserkerUntil > Date.now();
-    return (player.weapon?.weight || 0) * (hasBerserker ? berserkerWeightMultiplier : 1);
+    return (
+      (player.weapon?.weight || 0) *
+      (hasBerserker ? berserkerWeightMultiplier : 1)
+    );
   }
 
   function drawLeaderboard() {
@@ -538,26 +677,26 @@ $(function () {
     const sortedPlayers = visiblePlayers
       .sort((a, b) => (b.score || 0) - (a.score || 0))
       .slice(0, 5);
-    const panelWidth = 250;
-    const rowHeight = 24;
-    const panelHeight = 38 + sortedPlayers.length * rowHeight;
+    const panelWidth = 220;
+    const rowHeight = 22;
+    const panelHeight = 34 + sortedPlayers.length * rowHeight;
     const x = Math.max(12, canvas.width - panelWidth - 12);
     const y = 12;
 
-    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
-    ctx.fillRect(x, y, panelWidth, panelHeight);
+    drawGlassPanel(x, y, panelWidth, panelHeight);
 
-    ctx.fillStyle = "white";
-    ctx.font = "16px Arial";
-    ctx.fillText("Leaderboard", x + 14, y + 24);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.font = "15px Arial";
+    ctx.fillText("Leaderboard", x + 12, y + 22);
 
     sortedPlayers.forEach((p, index) => {
-      const rowY = y + 50 + index * rowHeight;
+      const rowY = y + 44 + index * rowHeight;
       const name = p.name || p.id;
-      const label =
-        nameCounts[name] > 1 ? `${name} ${p.id.slice(-4)}` : name;
-      ctx.fillText(`${index + 1}. ${trimText(label, 16)}`, x + 14, rowY);
-      ctx.fillText(`${p.score || 0}`, x + panelWidth - 34, rowY);
+      const label = nameCounts[name] > 1 ? `${name} ${p.id.slice(-4)}` : name;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.86)";
+      ctx.font = "13px Arial";
+      ctx.fillText(`${index + 1}. ${trimText(label, 15)}`, x + 12, rowY);
+      ctx.fillText(`${p.score || 0}`, x + panelWidth - 28, rowY);
     });
   }
 
@@ -568,6 +707,46 @@ $(function () {
     ctx.textAlign = "center";
     ctx.fillText(label, p.x + p.width / 2, p.y - 12);
     ctx.textAlign = "left";
+  }
+
+  function drawShadow(x, y, radius = 18) {
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.25)";
+    ctx.ellipse(x, y + 16, radius, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawPlayerSprite(p) {
+    const centerX = p.x + p.width / 2;
+    const centerY = p.y + p.height / 2;
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    ctx.rotate(getPlayerAngle(p));
+
+    if (assets.player) {
+      ctx.drawImage(
+        assets.player,
+        -playerSpriteSize / 2,
+        -playerSpriteSize / 2,
+        playerSpriteSize,
+        playerSpriteSize
+      );
+    } else {
+      ctx.fillStyle = p.id === playerId ? p.color : "red";
+      ctx.fillRect(-p.width / 2, -p.height / 2, p.width, p.height);
+    }
+
+    ctx.restore();
+  }
+
+  function getPlayerAngle(p) {
+    if (p.id !== playerId) return 0;
+
+    return Math.atan2(
+      mouseY - (p.y + p.height / 2),
+      mouseX - (p.x + p.width / 2),
+    );
   }
 
   function drawHealthBar(p) {
@@ -585,34 +764,88 @@ $(function () {
 
   function drawBarriers() {
     barriers.forEach((barrier) => {
-      ctx.fillStyle = "#3d3d3d";
-      ctx.fillRect(barrier.x, barrier.y, barrier.width, barrier.height);
-
-      ctx.fillStyle = "#5b5b5b";
-      ctx.fillRect(barrier.x, barrier.y, barrier.width, 4);
+      drawObstacle(barrier);
     });
+  }
+
+  function drawObstacle(obstacle) {
+    if (assets.wall) {
+      ctx.drawImage(
+        assets.wall,
+        obstacle.x,
+        obstacle.y,
+        obstacle.width,
+        obstacle.height,
+      );
+      return;
+    }
+
+    ctx.fillStyle = "#3d3d3d";
+    ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+
+    ctx.fillStyle = "#5b5b5b";
+    ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, 4);
   }
 
   function drawWeaponPickups() {
     weapons.forEach((weapon) => {
-      ctx.fillStyle = weapon.color || "#222";
-      ctx.fillRect(weapon.x, weapon.y, weapon.width, weapon.height);
-
-      ctx.fillStyle = "white";
-      ctx.font = "12px Arial";
-      ctx.fillText(weapon.name.slice(0, 1), weapon.x + 8, weapon.y + 16);
+      drawWeaponIcon(weapon.x, weapon.y, weapon.width, weapon.height, weapon);
     });
+  }
+
+  function drawWeaponIcon(x, y, width, height, weapon) {
+    const weaponImage = {
+      pistol: assets.pistol,
+      rifle: assets.rifle,
+      blaster: assets.bazooka,
+    }[weapon.type];
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+
+    if (weaponImage) {
+      ctx.save();
+      ctx.shadowColor = weapon.color || "#8b5cf6";
+      ctx.shadowBlur = 10;
+      ctx.drawImage(
+        weaponImage,
+        centerX - weaponSpriteSize / 2,
+        centerY - weaponSpriteSize / 2,
+        weaponSpriteSize,
+        weaponSpriteSize
+      );
+      ctx.restore();
+      return;
+    }
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+    ctx.fillRect(x - 2, y - 2, width + 4, height + 4);
+
+    ctx.fillStyle = weapon.color || "#222";
+
+    if (weapon.type === "rifle") {
+      ctx.fillRect(x + 3, y + 10, width - 4, 5);
+      ctx.fillRect(x + 12, y + 14, 5, 7);
+      ctx.fillRect(x + width - 4, y + 8, 5, 3);
+      return;
+    }
+
+    if (weapon.type === "blaster") {
+      ctx.beginPath();
+      ctx.arc(x + width / 2, y + height / 2, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(x + width - 7, y + 10, 8, 5);
+      return;
+    }
+
+    ctx.fillRect(x + 5, y + 8, 14, 6);
+    ctx.fillRect(x + 8, y + 14, 5, 7);
+    ctx.fillRect(x + 17, y + 7, 5, 3);
   }
 
   function drawMysteryBox() {
     if (!mysteryBox) return;
 
-    ctx.fillStyle = "#6f42c1";
-    ctx.fillRect(mysteryBox.x, mysteryBox.y, mysteryBox.width, mysteryBox.height);
-
-    ctx.fillStyle = "white";
-    ctx.font = "22px Arial";
-    ctx.fillText("?", mysteryBox.x + 12, mysteryBox.y + 26);
+    drawPickup(mysteryBox);
 
     ctx.fillStyle = "black";
     ctx.font = "12px Arial";
@@ -620,7 +853,7 @@ $(function () {
     ctx.fillText(
       "Hold E",
       mysteryBox.x + mysteryBox.width / 2,
-      mysteryBox.y + mysteryBox.height + 16
+      mysteryBox.y + mysteryBox.height + 16,
     );
     ctx.textAlign = "left";
 
@@ -628,7 +861,10 @@ $(function () {
 
     const startedAt = mysteryBox.openStartedAt;
     const duration = Math.max(1, mysteryBox.openCompleteAt - startedAt);
-    const progress = Math.min(1, Math.max(0, (Date.now() - startedAt) / duration));
+    const progress = Math.min(
+      1,
+      Math.max(0, (Date.now() - startedAt) / duration),
+    );
     const centerX = mysteryBox.x + mysteryBox.width / 2;
     const centerY = mysteryBox.y + mysteryBox.height / 2;
     const radius = mysteryBox.width / 2 + 9;
@@ -646,10 +882,37 @@ $(function () {
       centerY,
       radius,
       -Math.PI / 2,
-      -Math.PI / 2 + Math.PI * 2 * progress
+      -Math.PI / 2 + Math.PI * 2 * progress,
     );
     ctx.stroke();
     ctx.lineWidth = 1;
+  }
+
+  function drawPickup(pickup) {
+    const centerX = pickup.x + pickup.width / 2;
+    const centerY = pickup.y + pickup.height / 2;
+
+    ctx.save();
+    ctx.shadowColor = "#8b5cf6";
+    ctx.shadowBlur = 18;
+
+    if (assets.pickup) {
+      ctx.drawImage(
+        assets.pickup,
+        centerX - pickupSpriteSize / 2,
+        centerY - pickupSpriteSize / 2,
+        pickupSpriteSize,
+        pickupSpriteSize
+      );
+    } else {
+      ctx.fillStyle = "#6f42c1";
+      ctx.fillRect(pickup.x, pickup.y, pickup.width, pickup.height);
+      ctx.fillStyle = "white";
+      ctx.font = "22px Arial";
+      ctx.fillText("?", pickup.x + 12, pickup.y + 26);
+    }
+
+    ctx.restore();
   }
 
   function drawEquippedWeapon(p) {
@@ -657,7 +920,10 @@ $(function () {
 
     const angle =
       p.id === playerId
-        ? Math.atan2(mouseY - (p.y + p.height / 2), mouseX - (p.x + p.width / 2))
+        ? Math.atan2(
+            mouseY - (p.y + p.height / 2),
+            mouseX - (p.x + p.width / 2),
+          )
         : 0;
     const startX = p.x + p.width / 2;
     const startY = p.y + p.height / 2;
@@ -670,6 +936,10 @@ $(function () {
     ctx.moveTo(startX, startY);
     ctx.lineTo(endX, endY);
     ctx.stroke();
+    ctx.fillStyle = p.weapon.color || "black";
+    ctx.beginPath();
+    ctx.arc(endX, endY, p.weapon.type === "blaster" ? 4 : 2, 0, Math.PI * 2);
+    ctx.fill();
     ctx.lineWidth = 1;
   }
 
@@ -678,11 +948,32 @@ $(function () {
     const centerX = p.x + p.width / 2;
     const centerY = p.y + p.height / 2;
 
+    if (p.spawnProtectedUntil > now) {
+      ctx.strokeStyle = "#2f80ed";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(
+        centerX,
+        centerY,
+        Math.max(p.width, p.height) / 2 + 15,
+        0,
+        Math.PI * 2,
+      );
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
     if (p.armorUntil > now) {
       ctx.strokeStyle = "#8e44ad";
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(centerX, centerY, Math.max(p.width, p.height) / 2 + 5, 0, Math.PI * 2);
+      ctx.arc(
+        centerX,
+        centerY,
+        Math.max(p.width, p.height) / 2 + 5,
+        0,
+        Math.PI * 2,
+      );
       ctx.stroke();
       ctx.lineWidth = 1;
     }
@@ -691,7 +982,13 @@ $(function () {
       ctx.strokeStyle = "#f1c40f";
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(centerX, centerY, Math.max(p.width, p.height) / 2 + 10, 0, Math.PI * 2);
+      ctx.arc(
+        centerX,
+        centerY,
+        Math.max(p.width, p.height) / 2 + 10,
+        0,
+        Math.PI * 2,
+      );
       ctx.stroke();
       ctx.lineWidth = 1;
     }
@@ -705,7 +1002,10 @@ $(function () {
     const startedAt =
       weapon.reloadStartedAt || weapon.reloadCompleteAt - weapon.reloadTime;
     const duration = Math.max(1, weapon.reloadCompleteAt - startedAt);
-    const progress = Math.min(1, Math.max(0, (Date.now() - startedAt) / duration));
+    const progress = Math.min(
+      1,
+      Math.max(0, (Date.now() - startedAt) / duration),
+    );
     const centerX = p.x + p.width / 2;
     const centerY = p.y + p.height / 2;
     const radius = Math.max(p.width, p.height) / 2 + 9;
@@ -723,10 +1023,71 @@ $(function () {
       centerY,
       radius,
       -Math.PI / 2,
-      -Math.PI / 2 + Math.PI * 2 * progress
+      -Math.PI / 2 + Math.PI * 2 * progress,
     );
     ctx.stroke();
     ctx.lineWidth = 1;
+  }
+
+  function drawLowAmmoWarning(p) {
+    if (p.id !== playerId || !p.weapon || p.weapon.reloading) return;
+    if (p.berserkerUntil > Date.now()) return;
+
+    const lowAmmoLimit = Math.max(2, Math.ceil(p.weapon.magazineSize * 0.25));
+    if (p.weapon.magazine > lowAmmoLimit) return;
+
+    const label = p.weapon.magazine === 0 ? "Reload!" : "Low ammo";
+    ctx.fillStyle = p.weapon.magazine === 0 ? "#c0392b" : "#d35400";
+    ctx.font = "13px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(label, p.x + p.width / 2, p.y - 28);
+    ctx.textAlign = "left";
+  }
+
+  function drawDamageNumbers() {
+    const now = Date.now();
+
+    damageNumbers.forEach((item) => {
+      const age = now - item.createdAt;
+      const progress = age / item.duration;
+
+      ctx.globalAlpha = Math.max(0, 1 - progress);
+      ctx.fillStyle = "#c0392b";
+      ctx.font = "18px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(`-${item.damage}`, item.x, item.y - 16 - progress * 18);
+      ctx.textAlign = "left";
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  function drawAlerts() {
+    alerts.forEach((alert, index) => {
+      const y = 26 + index * 28;
+      const width = Math.min(420, canvas.width - 32);
+      const x = canvas.width / 2 - width / 2;
+
+      ctx.fillStyle = "rgba(0, 0, 0, 0.68)";
+      ctx.fillRect(x, y, width, 24);
+      ctx.fillStyle = "white";
+      ctx.font = "15px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(alert.message, canvas.width / 2, y + 17);
+      ctx.textAlign = "left";
+    });
+  }
+
+  function drawKillFeed() {
+    const x = 12;
+    const y = canvas.height - 24 - killFeed.length * 24;
+
+    killFeed.forEach((item, index) => {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.58)";
+      ctx.fillRect(x, y + index * 24, 260, 22);
+      ctx.fillStyle = "white";
+      ctx.font = "13px Arial";
+      ctx.fillText(item.message, x + 8, y + 15 + index * 24);
+    });
   }
 
   function trimText(text, maxLength) {
@@ -767,6 +1128,8 @@ $(function () {
     requestAnimationFrame(gameLoop);
   }
 
-  // Start the game
-  gameLoop();
+  // Start the game after image assets are ready.
+  loadAssets().then(() => {
+    gameLoop();
+  });
 });
