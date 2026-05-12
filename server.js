@@ -12,6 +12,7 @@ let mysterySpawnTimer = null;
 let mysteryOpenTimer = null;
 const STARTING_LIVES = 3;
 const RESPAWN_DELAY = 2000;
+const SPAWN_PROTECTION_DURATION = 2000;
 const MAX_HEALTH = 100;
 const BULLET_DAMAGE = 25;
 const MAP_WIDTH = 1050;
@@ -139,6 +140,7 @@ function createPlayer(id) {
     ability: null,
     armorUntil: 0,
     berserkerUntil: 0,
+    spawnProtectedUntil: 0,
     lastShotAt: 0,
     gameOver: false,
     sessionId: null,
@@ -223,6 +225,7 @@ function resetPlayerForSpawn(player, options = {}) {
     ability: null,
     armorUntil: 0,
     berserkerUntil: 0,
+    spawnProtectedUntil: Date.now() + SPAWN_PROTECTION_DURATION,
     lastShotAt: 0,
     gameOver: false,
     bullets: [],
@@ -248,6 +251,32 @@ function createEquippedWeapon(weapon) {
     reloadStartedAt: 0,
     reloadCompleteAt: 0,
     color: weapon.color,
+  };
+}
+
+function createDroppedWeapon(player) {
+  if (!player.weapon) return null;
+
+  const remainingAmmo = player.weapon.magazine + player.weapon.reserveAmmo;
+  if (remainingAmmo <= 0) return null;
+
+  return {
+    id: `drop-${Date.now()}-${Math.random()}`,
+    x: Math.max(20, Math.min(MAP_WIDTH - 44, player.x + 8)),
+    y: Math.max(20, Math.min(MAP_HEIGHT - 44, player.y + 8)),
+    width: 24,
+    height: 24,
+    type: player.weapon.type,
+    name: player.weapon.name,
+    damage: player.weapon.damage,
+    bulletSpeed: player.weapon.bulletSpeed,
+    cooldown: player.weapon.cooldown,
+    weight: player.weapon.weight,
+    magazineSize: player.weapon.magazineSize,
+    totalAmmo: remainingAmmo,
+    reloadTime: player.weapon.reloadTime,
+    color: player.weapon.color,
+    dropped: true,
   };
 }
 
@@ -624,14 +653,29 @@ io.on("connection", (socket) => {
     }
 
     target.lastSeen = Date.now();
+    if (target.spawnProtectedUntil > Date.now()) {
+      io.emit("bulletRemoved", bulletId);
+      socket.emit("playerUpdated", target);
+      return;
+    }
+
     let damage = Number.isFinite(Number(damageFromBullet(attacker, bulletId)))
       ? damageFromBullet(attacker, bulletId)
       : BULLET_DAMAGE;
     if (target.armorUntil > Date.now()) {
       damage *= ARMOR_DAMAGE_MULTIPLIER;
     }
+    damage = Math.round(damage);
     target.health = Math.max(0, target.health - damage);
     io.emit("bulletRemoved", bulletId);
+    io.emit("damageDealt", {
+      targetId,
+      attackerId,
+      damage,
+      x: target.x + target.width / 2,
+      y: target.y,
+      health: target.health,
+    });
 
     if (target.health > 0) {
       io.emit("playerUpdated", target);
@@ -646,6 +690,12 @@ io.on("connection", (socket) => {
     const killer = players[killerId];
 
     if (killedPlayer && killedPlayer.alive && killedId !== killerId) {
+      const droppedWeapon = createDroppedWeapon(killedPlayer);
+      if (droppedWeapon) {
+        weapons.push(droppedWeapon);
+        io.emit("weaponSpawned", droppedWeapon);
+      }
+
       killedPlayer.alive = false;
       killedPlayer.lives = Math.max(0, killedPlayer.lives - 1);
       killedPlayer.health = 0;
