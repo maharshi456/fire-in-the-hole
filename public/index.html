@@ -7,8 +7,22 @@
     <script src="logic.js"></script>
   </head>
   <body>
+    <div id="StartScreen" class="start-screen">
+      <form id="JoinForm" class="join-panel">
+        <h1>Fire in the Hole</h1>
+        <label for="PlayerName">Username</label>
+        <div class="join-row">
+          <input
+            id="PlayerName"
+            maxlength="16"
+            autocomplete="off"
+            placeholder="Enter username"
+            required
+          />
+          <button id="JoinButton" type="submit">Play</button>
+        </div>
+      </form>
+    </div>
     <canvas id="BasePlate"></canvas>
   </body>
-
-  <script></script>
 </html>

@@ -1,3 +1,62 @@
 body {
-    margin: 0;
+  margin: 0;
+  font-family: Arial, sans-serif;
+  overflow: hidden;
+}
+
+.start-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #d6d6d6;
+}
+
+.start-screen.hidden {
+  display: none;
+}
+
+.join-panel {
+  width: min(420px, calc(100vw - 32px));
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.72);
+  color: white;
+  border-radius: 8px;
+}
+
+.join-panel h1 {
+  margin: 0 0 18px;
+  font-size: 32px;
+}
+
+.join-panel label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.join-row {
+  display: flex;
+  gap: 10px;
+}
+
+.join-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.join-row button {
+  padding: 0 18px;
+  border: 0;
+  border-radius: 4px;
+  background: #2f80ed;
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
 }
